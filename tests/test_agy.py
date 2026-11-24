@@ -562,6 +562,55 @@ class PetWindowAgyTests(unittest.TestCase):
                 window.tray.hide()
                 window.close()
 
+    def test_ls_discover_only_reads_cmdline_for_matching_process_names(self) -> None:
+        from types import SimpleNamespace
+        from unittest.mock import patch
+
+        import psutil
+
+        from agy.telemetry import LanguageServerClient
+
+        cmdline_calls: list[str] = []
+
+        class _FakeProc:
+            def __init__(self, name: str, cmd: list[str], port: int | None = None) -> None:
+                self.info = {"name": name}
+                self._name = name
+                self._cmd = cmd
+                self._port = port
+
+            def cmdline(self) -> list[str]:
+                cmdline_calls.append(self._name)
+                return list(self._cmd)
+
+            def net_connections(self, kind: str = "tcp"):
+                if self._port is None:
+                    return []
+                return [SimpleNamespace(status=psutil.CONN_LISTEN, laddr=SimpleNamespace(port=self._port))]
+
+        seen_attrs: list[object] = []
+
+        def fake_process_iter(attrs=None):
+            seen_attrs.append(attrs)
+            return [
+                _FakeProc("System", []),
+                _FakeProc("svchost.exe", []),
+                _FakeProc("language_server_windows_x64.exe", ["--csrf_token=tok-123"], port=54321),
+            ]
+
+        client = LanguageServerClient()
+        with (
+            patch.object(psutil, "process_iter", side_effect=fake_process_iter),
+            patch.object(client, "_post", return_value={"userStatus": {}}),
+        ):
+            endpoint = client.discover()
+
+        self.assertEqual(seen_attrs, [["name"]])
+        self.assertEqual(cmdline_calls, ["language_server_windows_x64.exe"])
+        self.assertIsNotNone(endpoint)
+        self.assertEqual(endpoint.port, 54321)
+        self.assertEqual(endpoint.csrf_token, "tok-123")
+
 
 if __name__ == "__main__":
     unittest.main()

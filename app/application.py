@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gc
 import logging
 import os
 import sys
@@ -87,12 +88,20 @@ def run(argv: list[str] | None = None) -> int:
                 },
             }
         )
+    # Keep cyclic garbage collection strictly on the main Qt GUI thread.
+    # Under Python 3.14 + PySide6 6.12 on Windows, cyclic GC triggered inside
+    # background worker threads (e.g. agy-telemetry) can race with QPainter /
+    # Shiboken wrappers on the GUI thread and cause native access violations.
+    gc_was_enabled = gc.isenabled()
+    gc.disable()
     try:
         window = PetWindow(paths, config, recovery_status=recovery_status)
     except BaseException:
         exc_type, error, tb = sys.exc_info()
         if exc_type is not None and error is not None:
             recovery.record_exception(exc_type, error, tb)
+        if gc_was_enabled:
+            gc.enable()
         diagnostics.close()
         instance.close()
         raise
@@ -105,6 +114,10 @@ def run(argv: list[str] | None = None) -> int:
         diagnostics.close()
 
     application.aboutToQuit.connect(_on_about_to_quit)
+
+    gc_timer = QTimer(application)
+    gc_timer.timeout.connect(gc.collect)
+    gc_timer.start(15_000)
 
     heartbeat = QTimer(application)
     heartbeat.timeout.connect(recovery.heartbeat)
@@ -124,4 +137,6 @@ def run(argv: list[str] | None = None) -> int:
     try:
         return application.exec()
     finally:
+        if gc_was_enabled:
+            gc.enable()
         diagnostics.close()

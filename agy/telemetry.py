@@ -752,11 +752,11 @@ class LanguageServerClient:
             import psutil
         except ImportError:
             return None
-        for proc in psutil.process_iter(["name", "cmdline"]):
+        for proc in psutil.process_iter(["name"]):
             try:
                 if "language_server" not in (proc.info.get("name") or "").lower():
                     continue
-                token = _csrf_from_cmdline(proc.info.get("cmdline") or [])
+                token = _csrf_from_cmdline(proc.cmdline() or [])
                 if not token:
                     continue
                 ports = sorted(
