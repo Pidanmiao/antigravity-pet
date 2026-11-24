@@ -64,6 +64,7 @@ class QuotaBar(QWidget):
 
 class HudBar(QWidget):
     settings_changed = Signal()
+    interaction_changed = Signal(bool)
 
     def __init__(
         self,
@@ -73,6 +74,7 @@ class HudBar(QWidget):
         on_refresh: Callable[[], None],
         on_pin: Callable[[str], None],
         on_hide: Callable[[], None],
+        on_visibility: Callable[[str], None] | None = None,
     ) -> None:
         super().__init__(
             None,
@@ -86,9 +88,12 @@ class HudBar(QWidget):
         self._on_refresh = on_refresh
         self._on_pin = on_pin
         self._on_hide = on_hide
+        self._on_visibility = on_visibility
         self._drag_from: QPoint | None = None
         self._conversations: list[tuple[str, str]] = []
         self._pet_rect: QRect | None = None
+        self._hovered = False
+        self._menu_open = False
 
         self._tail_dir: str | None = None  # "down" (HUD above pet), "up" (below) or None
         self._outer = QVBoxLayout(self)
@@ -386,6 +391,24 @@ class HudBar(QWidget):
 
     # ----- mouse ------------------------------------------------------------
 
+    @property
+    def interactive(self) -> bool:
+        return self._hovered or self._menu_open
+
+    def enterEvent(self, event) -> None:
+        self._hovered = True
+        self.interaction_changed.emit(True)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        self._hovered = False
+        self.interaction_changed.emit(self.interactive)
+        super().leaveEvent(event)
+
+    def hideEvent(self, event) -> None:
+        self._hovered = False
+        super().hideEvent(event)
+
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton and not self.attached and not self.settings.get("hud_locked"):
             self._drag_from = event.globalPosition().toPoint() - self.pos()
@@ -436,11 +459,29 @@ class HudBar(QWidget):
             act.triggered.connect(lambda _c=False, value=key: self._set_appearance(value))
         if not self.attached:
             toggle("锁定当前坐标（防误拖动）", bool(self.settings.get("hud_locked")), self._toggle_lock)
+        if self._on_visibility is not None:
+            vis_menu = menu.addMenu("显示模式")
+            vis_group = QActionGroup(vis_menu)
+            current_vis = self.settings.get("hud_visibility") or (
+                "show" if self.settings.get("hud_enabled", True) else "hide"
+            )
+            for key, label in (("show", "显示"), ("auto", "自动"), ("hide", "隐藏")):
+                act = vis_menu.addAction(label)
+                act.setCheckable(True)
+                act.setChecked(current_vis == key)
+                vis_group.addAction(act)
+                act.triggered.connect(lambda _c=False, value=key: self._on_visibility(value))
         menu.addAction("打开 Token Meter", self._on_open_meter)
         menu.addAction("立即刷新数据", self._on_refresh)
         menu.addSeparator()
         menu.addAction("隐藏悬浮条", self._on_hide)
-        menu.exec(event.globalPos())
+        self._menu_open = True
+        self.interaction_changed.emit(True)
+        try:
+            menu.exec(event.globalPos())
+        finally:
+            self._menu_open = False
+            self.interaction_changed.emit(self.interactive)
 
     def _set_mode(self, mode: str) -> None:
         self.settings["hud_mode"] = mode

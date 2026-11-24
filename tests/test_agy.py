@@ -490,6 +490,78 @@ class PetWindowAgyTests(unittest.TestCase):
                 window.tray.hide()
                 window.close()
 
+    def test_hud_auto_hide_mode_and_legacy_config_migration(self) -> None:
+        from PySide6.QtCore import QEvent, QPointF
+        from PySide6.QtGui import QEnterEvent
+        from PySide6.QtWidgets import QApplication
+
+        from app.paths import AppPaths
+        from pet.window import PetWindow
+        from settings.config import ConfigManager
+
+        app = QApplication.instance() or QApplication([])
+        with tempfile.TemporaryDirectory() as folder:
+            paths = AppPaths(app_dir=Path(folder), bundle_dir=ROOT)
+            paths.config_path.write_text(
+                json.dumps({"agy": {"hud_enabled": False}}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            config = ConfigManager(paths.config_path)
+            self.assertEqual(config.section("agy")["hud_visibility"], "hide")
+            self.assertEqual(config.section("agy")["hud_auto_hide_seconds"], 5)
+
+            window = PetWindow(paths, config)
+            try:
+                window.show()
+                app.processEvents()
+                self.assertFalse(window.hud_bar.isVisible())
+
+                window.set_hud_auto_hide_seconds(3)
+                window.set_hud_visibility("auto")
+                app.processEvents()
+                self.assertTrue(window.hud_bar.isVisible())
+                self.assertTrue(window._hud_auto_hide_timer.isActive())
+                self.assertEqual(window._hud_auto_hide_timer.interval(), 3000)
+
+                window._on_hud_auto_hide_timeout()
+                app.processEvents()
+                self.assertFalse(window.hud_bar.isVisible())
+
+                enter = QEnterEvent(QPointF(10, 10), QPointF(10, 10), QPointF(10, 10))
+                window.enterEvent(enter)
+                app.processEvents()
+                self.assertTrue(window.hud_bar.isVisible())
+                self.assertFalse(window._hud_auto_hide_timer.isActive())
+
+                window.leaveEvent(QEvent(QEvent.Type.Leave))
+                app.processEvents()
+                self.assertTrue(window._hud_auto_hide_timer.isActive())
+
+                window.hud_bar.enterEvent(enter)
+                app.processEvents()
+                self.assertFalse(window._hud_auto_hide_timer.isActive())
+
+                window.hud_bar.leaveEvent(QEvent(QEvent.Type.Leave))
+                app.processEvents()
+                self.assertTrue(window._hud_auto_hide_timer.isActive())
+
+                window._on_hud_auto_hide_timeout()
+                app.processEvents()
+                self.assertFalse(window.hud_bar.isVisible())
+
+                window.set_hud_visibility("show")
+                app.processEvents()
+                self.assertTrue(window.hud_bar.isVisible())
+                self.assertFalse(window._hud_auto_hide_timer.isActive())
+            finally:
+                window.telemetry.stop()
+                window.hud_bar.close()
+                window.token_meter.close()
+                window.control_panel.close()
+                window.food_panel.close()
+                window.tray.hide()
+                window.close()
+
 
 if __name__ == "__main__":
     unittest.main()

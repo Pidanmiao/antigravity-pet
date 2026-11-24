@@ -106,13 +106,24 @@
     renderForms(state.forms || [], agy);
 
     $('chk-follow-model').checked = Boolean(agy.follow_model);
-    $('chk-hud-enabled').checked = Boolean(agy.hud_enabled);
     $('chk-hud-locked').checked = Boolean(agy.hud_locked);
     $('chk-autonomy').checked = Boolean(agy.autonomy);
     $('chk-reactions').checked = Boolean(agy.reactions);
     $('chk-auto-launch').checked = Boolean(state.bridgeSettings?.autoLaunchPet);
     $('sel-appearance').value = agy.hud_appearance || 'dialog';
     $('sel-hud-mode').value = agy.hud_mode || 'attached';
+    const vis = ['show', 'auto', 'hide'].includes(agy.hud_visibility)
+      ? agy.hud_visibility
+      : agy.hud_enabled === false
+        ? 'hide'
+        : 'show';
+    $('sel-hud-visibility').value = vis;
+    $('wrap-hud-delay').hidden = vis !== 'auto';
+    const delayInput = $('inp-hud-delay');
+    if (document.activeElement !== delayInput) {
+      const secs = Math.min(60, Math.max(1, Math.round(Number(agy.hud_auto_hide_seconds) || 5)));
+      delayInput.value = String(secs);
+    }
 
     const live = state.live || {};
     const convs = Array.isArray(live.conversations) ? live.conversations : [];
@@ -239,7 +250,16 @@
   });
 
   $('chk-follow-model').addEventListener('change', (e) => saveConfig({ follow_model: e.target.checked }));
-  $('chk-hud-enabled').addEventListener('change', (e) => saveConfig({ hud_enabled: e.target.checked }));
+  $('sel-hud-visibility').addEventListener('change', (e) => {
+    const vis = e.target.value;
+    $('wrap-hud-delay').hidden = vis !== 'auto';
+    saveConfig({ hud_visibility: vis, hud_enabled: vis !== 'hide' });
+  });
+  $('inp-hud-delay').addEventListener('change', (e) => {
+    const secs = Math.min(60, Math.max(1, Math.round(Number(e.target.value) || 5)));
+    e.target.value = String(secs);
+    saveConfig({ hud_auto_hide_seconds: secs });
+  });
   $('chk-hud-locked').addEventListener('change', (e) => saveConfig({ hud_locked: e.target.checked }));
   $('chk-autonomy').addEventListener('change', (e) => saveConfig({ autonomy: e.target.checked }));
   $('chk-reactions').addEventListener('change', (e) => saveConfig({ reactions: e.target.checked }));

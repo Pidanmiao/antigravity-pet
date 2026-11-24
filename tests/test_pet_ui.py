@@ -123,6 +123,57 @@ class CompactControlPanelTests(unittest.TestCase):
         finally:
             panel.hide()
 
+    def test_hud_visibility_dropdown_reveals_delay_only_in_auto_mode(self) -> None:
+        seen_vis: list[str] = []
+        seen_delay: list[int] = []
+        panel = PetControlPanel(
+            on_mode=lambda _mode: None,
+            on_size=lambda _size: None,
+            on_feed=lambda: None,
+            on_say=lambda: None,
+            on_snap=lambda: None,
+            on_awareness=lambda _enabled: None,
+            on_read_window_title=lambda _enabled: None,
+            on_idle_detection=lambda _enabled: None,
+            on_topmost=lambda _enabled: None,
+            on_fullscreen_hide=lambda _enabled: None,
+            on_passthrough=lambda _enabled: None,
+            on_autostart=lambda _enabled: None,
+            on_activity_level=lambda _level: None,
+            on_walk_speed=lambda _speed: None,
+            on_reduced_motion=lambda _enabled: None,
+            on_hover_pause=lambda _enabled: None,
+            on_desktop_surfaces=lambda _enabled: None,
+            on_action=lambda _action: None,
+            on_hide=lambda: None,
+            on_privacy=lambda: None,
+            on_quit=lambda: None,
+            on_hud_visibility=seen_vis.append,
+            on_hud_auto_hide_seconds=seen_delay.append,
+        )
+        try:
+            panel.popup_at(QPoint(120, 120))
+            self.application.processEvents()
+            height_show = panel.height()
+            self.assertTrue(panel._hud_delay_row.isHidden())
+
+            panel.hud_visibility.setCurrentIndex(panel.hud_visibility.findData("auto"))
+            self.application.processEvents()
+            self.assertEqual(seen_vis, ["auto"])
+            self.assertFalse(panel._hud_delay_row.isHidden())
+            self.assertEqual(panel.height(), height_show)
+
+            panel.hud_delay.setValue(9)
+            self.application.processEvents()
+            self.assertEqual(seen_delay, [9])
+
+            panel.hud_visibility.setCurrentIndex(panel.hud_visibility.findData("hide"))
+            self.application.processEvents()
+            self.assertEqual(seen_vis, ["auto", "hide"])
+            self.assertTrue(panel._hud_delay_row.isHidden())
+        finally:
+            panel.hide()
+
 
 if __name__ == "__main__":
     unittest.main()

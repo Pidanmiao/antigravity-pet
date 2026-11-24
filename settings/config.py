@@ -52,6 +52,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "hop_to_window": True,
         "explore_windows": True,
         "hud_enabled": True,
+        "hud_visibility": "show",
+        "hud_auto_hide_seconds": 5,
         "hud_mode": "attached",
         "hud_appearance": "dialog",
         "hud_locked": False,
@@ -60,6 +62,40 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "pinned_conversation": "",
     },
 }
+
+
+VALID_HUD_VISIBILITIES = ("show", "auto", "hide")
+HUD_AUTO_HIDE_MIN_SECONDS = 1
+HUD_AUTO_HIDE_MAX_SECONDS = 60
+
+
+def normalize_hud_visibility(value: Any, *, fallback_enabled: bool = True) -> str:
+    if isinstance(value, str) and value in VALID_HUD_VISIBILITIES:
+        return value
+    return "show" if fallback_enabled else "hide"
+
+
+def clamp_hud_auto_hide_seconds(value: Any, default: int = 5) -> int:
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, (int, float)):
+        return max(HUD_AUTO_HIDE_MIN_SECONDS, min(HUD_AUTO_HIDE_MAX_SECONDS, int(round(value))))
+    return default
+
+
+def _normalize_agy_hud(merged: dict[str, Any], raw: dict[str, Any]) -> None:
+    agy = merged.get("agy")
+    if not isinstance(agy, dict):
+        return
+    raw_agy = raw.get("agy") if isinstance(raw, dict) and isinstance(raw.get("agy"), dict) else {}
+    if "hud_visibility" in raw_agy and isinstance(raw_agy["hud_visibility"], str) and raw_agy["hud_visibility"] in VALID_HUD_VISIBILITIES:
+        visibility = raw_agy["hud_visibility"]
+    else:
+        visibility = normalize_hud_visibility(None, fallback_enabled=bool(agy.get("hud_enabled", True)))
+    agy["hud_visibility"] = visibility
+    agy["hud_enabled"] = visibility != "hide"
+    raw_seconds = raw_agy.get("hud_auto_hide_seconds", agy.get("hud_auto_hide_seconds", 5))
+    agy["hud_auto_hide_seconds"] = clamp_hud_auto_hide_seconds(raw_seconds, default=5)
 
 
 def _merge_defaults(default: Any, value: Any) -> Any:
@@ -105,6 +141,7 @@ class ConfigManager:
         # cannot make the pet appear to flicker.
         if not isinstance(previous_schema, int) or previous_schema < 3:
             merged["awareness"]["hide_on_fullscreen"] = False
+        _normalize_agy_hud(merged, raw)
         merged["schema_version"] = DEFAULT_CONFIG["schema_version"]
         return merged
 
@@ -117,6 +154,7 @@ class ConfigManager:
         if not raw:
             return False
         reloaded = _merge_defaults(DEFAULT_CONFIG, raw)
+        _normalize_agy_hud(reloaded, raw)
         reloaded["schema_version"] = DEFAULT_CONFIG["schema_version"]
         for key in preserve_top_keys:
             if key in self.data and self.data[key] is not None:

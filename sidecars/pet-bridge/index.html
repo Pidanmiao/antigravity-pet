@@ -102,8 +102,22 @@
           </select>
         </div>
 
+        <div class="setting-row">
+          <label class="field-label" for="sel-hud-visibility">HUD 显示</label>
+          <div class="inline-control">
+            <select id="sel-hud-visibility" class="select-input">
+              <option value="show">显示</option>
+              <option value="auto">自动</option>
+              <option value="hide">隐藏</option>
+            </select>
+            <label class="delay-box" id="wrap-hud-delay" hidden>
+              <input type="number" id="inp-hud-delay" class="number-input" min="1" max="60" step="1" value="5" aria-label="自动隐藏秒数">
+              <span>秒</span>
+            </label>
+          </div>
+        </div>
+
         <div class="toggle-grid">
-          <label class="switch-label"><input type="checkbox" id="chk-hud-enabled"><span>显示 HUD 悬浮条</span></label>
           <label class="switch-label"><input type="checkbox" id="chk-hud-locked"><span>锁定悬浮坐标</span></label>
           <label class="switch-label"><input type="checkbox" id="chk-autonomy"><span>自主爬窗与互动</span></label>
           <label class="switch-label"><input type="checkbox" id="chk-reactions"><span>对速率/限额做出反应</span></label>

@@ -52,6 +52,7 @@ const PET_FORMS = [
 ];
 const VALID_FORM_IDS = new Set(PET_FORMS.map((f) => f.id));
 const VALID_HUD_MODES = new Set(['attached', 'floating']);
+const VALID_HUD_VISIBILITIES = new Set(['show', 'auto', 'hide']);
 const VALID_HUD_APPEARANCES = new Set(['dialog', 'capsule', 'seamless', 'glass']);
 
 function findAppDataDirs() {
@@ -834,6 +835,8 @@ const DEFAULT_AGY_CONFIG = {
   hop_to_window: true,
   explore_windows: true,
   hud_enabled: true,
+  hud_visibility: 'show',
+  hud_auto_hide_seconds: 5,
   hud_mode: 'attached',
   hud_appearance: 'dialog',
   hud_locked: false,
@@ -842,11 +845,29 @@ const DEFAULT_AGY_CONFIG = {
   pinned_conversation: '',
 };
 
+function clampAutoHideSeconds(val, fallback = 5) {
+  const n = Number(val);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(60, Math.max(1, Math.round(n)));
+}
+
+function normalizeAgyHud(agy) {
+  const out = { ...DEFAULT_AGY_CONFIG, ...agy };
+  if (typeof agy?.hud_visibility === 'string' && VALID_HUD_VISIBILITIES.has(agy.hud_visibility)) {
+    out.hud_visibility = agy.hud_visibility;
+  } else {
+    out.hud_visibility = out.hud_enabled === false ? 'hide' : 'show';
+  }
+  out.hud_enabled = out.hud_visibility !== 'hide';
+  out.hud_auto_hide_seconds = clampAutoHideSeconds(out.hud_auto_hide_seconds, 5);
+  return out;
+}
+
 function readPetConfig() {
   const cfgPath = join(PET_ROOT, 'config.json');
   try {
     const raw = JSON.parse(readFileSync(cfgPath, 'utf-8'));
-    return { ...DEFAULT_AGY_CONFIG, ...(raw?.agy && typeof raw.agy === 'object' ? raw.agy : {}) };
+    return normalizeAgyHud(raw?.agy && typeof raw.agy === 'object' ? raw.agy : {});
   } catch {
     return { ...DEFAULT_AGY_CONFIG };
   }
@@ -873,6 +894,15 @@ function updatePetConfig(patch) {
       agy[boolKey] = patch[boolKey];
     }
   }
+  if (typeof patch.hud_visibility === 'string' && VALID_HUD_VISIBILITIES.has(patch.hud_visibility)) {
+    agy.hud_visibility = patch.hud_visibility;
+    agy.hud_enabled = patch.hud_visibility !== 'hide';
+  } else if (typeof patch.hud_enabled === 'boolean') {
+    agy.hud_visibility = patch.hud_enabled ? 'show' : 'hide';
+  }
+  if (patch.hud_auto_hide_seconds !== undefined) {
+    agy.hud_auto_hide_seconds = clampAutoHideSeconds(patch.hud_auto_hide_seconds, 5);
+  }
   if (typeof patch.hud_mode === 'string' && VALID_HUD_MODES.has(patch.hud_mode)) {
     agy.hud_mode = patch.hud_mode;
   }
@@ -885,7 +915,7 @@ function updatePetConfig(patch) {
 
   raw.agy = agy;
   atomicWriteJson(cfgPath, raw);
-  return { ...DEFAULT_AGY_CONFIG, ...agy };
+  return normalizeAgyHud(agy);
 }
 
 let lastAutoLaunchAttempt = 0;

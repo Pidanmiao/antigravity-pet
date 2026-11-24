@@ -57,7 +57,7 @@ from pet.physics import PhysicsBounds, ThrowPhysics
 from pet.renderer import Bubble, PetRenderer
 from pet.state import PetStateStore
 from pet.surfaces import DesktopSurfaceTracker
-from settings.config import ConfigManager
+from settings.config import ConfigManager, clamp_hud_auto_hide_seconds, normalize_hud_visibility
 from settings.panel import PetControlPanel
 
 
@@ -220,6 +220,8 @@ class PetWindow(QWidget):
             on_follow_model=self.set_follow_model,
             on_open_meter=self.open_token_meter,
             on_hud=self.set_hud_enabled,
+            on_hud_visibility=self.set_hud_visibility,
+            on_hud_auto_hide_seconds=self.set_hud_auto_hide_seconds,
             on_autonomy=self.set_autonomy,
             forms=tuple((form.id, form.name) for form in FORMS),
         )
@@ -466,6 +468,8 @@ class PetWindow(QWidget):
             form=self.form_id,
             follow_model=bool(self._agy().get("follow_model", False)),
             hud_enabled=bool(self._agy().get("hud_enabled", True)),
+            hud_visibility=self._hud_visibility(),
+            hud_auto_hide_seconds=self._hud_auto_hide_seconds(),
             autonomy=bool(self._agy().get("autonomy", True)),
         )
 
@@ -798,6 +802,8 @@ class PetWindow(QWidget):
     def mousePressEvent(self, event) -> None:
         if event.button() != Qt.MouseButton.LeftButton:
             return
+        if hasattr(self, "hud_bar"):
+            self._reveal_hud_temporarily(start_countdown=True)
         self._interrupt_activity()
         position = event.globalPosition().toPoint()
         self._descend_x = None
@@ -1217,12 +1223,16 @@ class PetWindow(QWidget):
 
     def enterEvent(self, event) -> None:
         self._hovered = True
+        if hasattr(self, "hud_bar"):
+            self._reveal_hud_temporarily()
         if bool(self.config.section("comfort").get("hover_pause", True)):
             self._interrupt_activity(delay_seconds=5.0)
         super().enterEvent(event)
 
     def leaveEvent(self, event) -> None:
         self._hovered = False
+        if hasattr(self, "hud_bar"):
+            self._schedule_hud_auto_hide()
         super().leaveEvent(event)
 
     def set_passthrough(self, enabled: bool) -> None:
@@ -1438,9 +1448,15 @@ class PetWindow(QWidget):
             on_open_meter=self.open_token_meter,
             on_refresh=self.telemetry.refresh_now,
             on_pin=self._pin_conversation,
-            on_hide=lambda: self.set_hud_enabled(False),
+            on_hide=lambda: self.set_hud_visibility("hide"),
+            on_visibility=self.set_hud_visibility,
         )
         self.hud_bar.settings_changed.connect(self.config.save)
+        self.hud_bar.interaction_changed.connect(self._on_hud_interaction_changed)
+        self._hud_temp_visible = False
+        self._hud_auto_hide_timer = QTimer(self)
+        self._hud_auto_hide_timer.setSingleShot(True)
+        self._hud_auto_hide_timer.timeout.connect(self._on_hud_auto_hide_timeout)
         self.token_meter = TokenMeterWindow(
             on_request_report=self.telemetry.request_report,
             on_toggle_subagents=self._set_include_subagents,
@@ -1464,6 +1480,8 @@ class PetWindow(QWidget):
         self.telemetry.refresh_now()
 
     def _sync_external_config(self) -> None:
+        prev_visibility = self._hud_visibility()
+        prev_delay = self._hud_auto_hide_seconds()
         if not hasattr(self, "telemetry") or not self.config.reload_if_external_change():
             return
         settings = self._agy()
@@ -1486,7 +1504,19 @@ class PetWindow(QWidget):
         if was_attached and not self.hud_bar.attached:
             self.hud_bar.restore_floating_position()
         self.hud_bar.apply_appearance()
-        self._sync_hud_visibility()
+        new_visibility = self._hud_visibility()
+        new_delay = self._hud_auto_hide_seconds()
+        if new_visibility != prev_visibility:
+            if new_visibility == "auto":
+                self._reveal_hud_temporarily(start_countdown=True)
+            else:
+                self._hud_auto_hide_timer.stop()
+                self._hud_temp_visible = False
+                self._sync_hud_visibility()
+        else:
+            if new_visibility == "auto" and new_delay != prev_delay and self._hud_auto_hide_timer.isActive():
+                self._hud_auto_hide_timer.start(new_delay * 1000)
+            self._sync_hud_visibility()
         self._hud_anchor = None
         self._follow_hud()
         if self.telemetry.last_snapshot is not None:
@@ -1502,19 +1532,98 @@ class PetWindow(QWidget):
         self.token_meter.raise_()
         self.token_meter.activateWindow()
 
-    def set_hud_enabled(self, enabled: bool) -> None:
-        self._agy_set("hud_enabled", bool(enabled))
+    def _hud_visibility(self) -> str:
+        settings = self._agy()
+        return normalize_hud_visibility(
+            settings.get("hud_visibility"),
+            fallback_enabled=bool(settings.get("hud_enabled", True)),
+        )
+
+    def _hud_auto_hide_seconds(self) -> int:
+        return clamp_hud_auto_hide_seconds(self._agy().get("hud_auto_hide_seconds", 5))
+
+    def _want_hud_visible(self) -> bool:
+        settings = self._agy()
+        visibility = self._hud_visibility()
+        if visibility == "hide":
+            return False
+        if visibility == "auto" and not self._hud_temp_visible:
+            return False
+        return settings.get("hud_mode") == "floating" or self.isVisible()
+
+    def _reveal_hud_temporarily(self, *, start_countdown: bool = False) -> None:
+        if self._hud_visibility() != "auto":
+            return
+        self._hud_temp_visible = True
         self._sync_hud_visibility()
+        if self._hovered or self.hud_bar.interactive:
+            self._hud_auto_hide_timer.stop()
+        elif start_countdown:
+            self._hud_auto_hide_timer.start(self._hud_auto_hide_seconds() * 1000)
+
+    def _schedule_hud_auto_hide(self) -> None:
+        if self._hud_visibility() != "auto" or not self._hud_temp_visible:
+            return
+        if self._hovered or self.hud_bar.interactive:
+            self._hud_auto_hide_timer.stop()
+            return
+        self._hud_auto_hide_timer.start(self._hud_auto_hide_seconds() * 1000)
+
+    def _on_hud_auto_hide_timeout(self) -> None:
+        if self._hud_visibility() != "auto":
+            return
+        if self._hovered or self.hud_bar.interactive:
+            return
+        self._hud_temp_visible = False
+        self._sync_hud_visibility()
+
+    def _on_hud_interaction_changed(self, interactive: bool) -> None:
+        if self._hud_visibility() != "auto":
+            return
+        if interactive:
+            self._hud_auto_hide_timer.stop()
+        else:
+            self._schedule_hud_auto_hide()
+
+    def set_hud_visibility(self, visibility: str) -> None:
+        normalized = normalize_hud_visibility(visibility)
+        self._agy_set("hud_visibility", normalized)
+        self._agy_set("hud_enabled", normalized != "hide")
+        if normalized == "auto":
+            self._reveal_hud_temporarily(start_countdown=True)
+        else:
+            self._hud_auto_hide_timer.stop()
+            self._hud_temp_visible = False
+            self._sync_hud_visibility()
         self._refresh_control_panel()
 
+    def set_hud_auto_hide_seconds(self, seconds: int) -> None:
+        clamped = clamp_hud_auto_hide_seconds(seconds)
+        self._agy_set("hud_auto_hide_seconds", clamped)
+        if (
+            self._hud_visibility() == "auto"
+            and self._hud_temp_visible
+            and self._hud_auto_hide_timer.isActive()
+        ):
+            self._hud_auto_hide_timer.start(clamped * 1000)
+        self._refresh_control_panel()
+
+    def set_hud_enabled(self, enabled: bool) -> None:
+        self.set_hud_visibility("show" if enabled else "hide")
+
     def _sync_hud_visibility(self) -> None:
-        settings = self._agy()
-        want = bool(settings.get("hud_enabled", True)) and (
-            settings.get("hud_mode") == "floating" or self.isVisible()
-        )
+        want = self._want_hud_visible()
         if want and not self.hud_bar.isVisible():
-            self.hud_bar.show()
             self._hud_anchor = None
+            if self.hud_bar.attached:
+                bubble_visible = self.bubble.visible
+                perched = self.surface_tracker.attached
+                self.hud_bar.follow_pet(
+                    self._sprite_rect(),
+                    sprite_top=self._hud_ceiling(bubble_visible),
+                    prefer_above=perched,
+                )
+            self.hud_bar.show()
             self._follow_hud()
         elif not want and self.hud_bar.isVisible():
             self.hud_bar.hide()
@@ -2083,10 +2192,7 @@ class PetWindow(QWidget):
     def _follow_hud(self) -> None:
         if not hasattr(self, "hud_bar"):
             return
-        if self.hud_bar.isVisible() != (
-            bool(self._agy().get("hud_enabled", True))
-            and (self._agy().get("hud_mode") == "floating" or self.isVisible())
-        ):
+        if self.hud_bar.isVisible() != self._want_hud_visible():
             self._sync_hud_visibility()
         if not self.hud_bar.isVisible() or not self.hud_bar.attached:
             return

@@ -11,12 +11,14 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QButtonGroup,
     QCheckBox,
+    QComboBox,
     QFrame,
     QGraphicsDropShadowEffect,
     QGridLayout,
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QSpinBox,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -54,6 +56,8 @@ class PetControlPanel(QWidget):
         on_follow_model: Callable[[bool], None] | None = None,
         on_open_meter: Callable[[], None] | None = None,
         on_hud: Callable[[bool], None] | None = None,
+        on_hud_visibility: Callable[[str], None] | None = None,
+        on_hud_auto_hide_seconds: Callable[[int], None] | None = None,
         on_autonomy: Callable[[bool], None] | None = None,
         forms: tuple[tuple[str, str], ...] = (("carbon", "Carbon"), ("hydergon", "Hydrogen"), ("neon", "Neon")),
     ) -> None:
@@ -160,15 +164,57 @@ class PetControlPanel(QWidget):
         agy_row = QGridLayout()
         agy_row.setHorizontalSpacing(8)
         agy_row.setVerticalSpacing(6)
+        agy_row.setColumnStretch(0, 1)
+        agy_row.setColumnStretch(1, 1)
         self.follow_model = self._toggle("跟随模型", on_follow_model or (lambda _enabled: None))
         self.follow_model.setToolTip("根据 Antigravity 当前使用的模型（Carbon / Hydrogen / Neon / Claude）自动切换形态")
-        self.hud = self._toggle("HUD 条", on_hud or (lambda _enabled: None))
-        self.hud.setToolTip("显示 tok/s · 限额 · 缓存 · 上下文 迷你悬浮条")
         self.autonomy = self._toggle("自主行为", on_autonomy or (lambda _enabled: None))
         self.autonomy.setToolTip("模型干活时陪着干活、跳上 Antigravity 窗口、闲久了打盹、限额低会犯困、久坐提醒")
+
+        hud_row = QHBoxLayout()
+        hud_row.setContentsMargins(0, 0, 0, 0)
+        hud_row.setSpacing(5)
+        hud_label = QLabel("HUD")
+        hud_label.setObjectName("inlineLabel")
+        self.hud_visibility = QComboBox()
+        self.hud_visibility.setObjectName("hudSelect")
+        self.hud_visibility.setToolTip("选择 HUD 悬浮条显示方式：显示 / 自动（悬停或点击桌宠后显示）/ 隐藏")
+        for label, value in (("显示", "show"), ("自动", "auto"), ("隐藏", "hide")):
+            self.hud_visibility.addItem(label, value)
+        self.hud_visibility.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self._on_hud = on_hud
+        self._on_hud_visibility = on_hud_visibility
+        self._on_hud_auto_hide_seconds = on_hud_auto_hide_seconds
+        self.hud_visibility.currentIndexChanged.connect(self._handle_hud_visibility_changed)
+        hud_row.addWidget(hud_label)
+        hud_row.addWidget(self.hud_visibility, 1)
+
+        self._hud_delay_row = QWidget()
+        delay_policy = self._hud_delay_row.sizePolicy()
+        delay_policy.setRetainSizeWhenHidden(True)
+        self._hud_delay_row.setSizePolicy(delay_policy)
+        delay_layout = QHBoxLayout(self._hud_delay_row)
+        delay_layout.setContentsMargins(0, 0, 0, 0)
+        delay_layout.setSpacing(5)
+        delay_label = QLabel("时长")
+        delay_label.setObjectName("inlineLabel")
+        self.hud_delay = QSpinBox()
+        self.hud_delay.setObjectName("hudDelaySpin")
+        self.hud_delay.setRange(1, 60)
+        self.hud_delay.setValue(5)
+        self.hud_delay.setSuffix(" 秒")
+        self.hud_delay.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.hud_delay.setToolTip("自动模式下，鼠标离开桌宠与 HUD 后延迟隐藏的秒数")
+        self.hud_delay.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.hud_delay.valueChanged.connect(self._handle_hud_delay_changed)
+        delay_layout.addWidget(delay_label)
+        delay_layout.addWidget(self.hud_delay, 1)
+        self._hud_delay_row.setVisible(False)
+
         agy_row.addWidget(self.follow_model, 0, 0)
-        agy_row.addWidget(self.hud, 0, 1)
+        agy_row.addLayout(hud_row, 0, 1)
         agy_row.addWidget(self.autonomy, 1, 0)
+        agy_row.addWidget(self._hud_delay_row, 1, 1)
         layout.addLayout(agy_row)
         meter = self._quick_button("Token Meter 面板")
         if on_open_meter is not None:
@@ -309,6 +355,20 @@ class PetControlPanel(QWidget):
             "QCheckBox{min-height:20px;color:#e4e0ff;font-size:11px;spacing:6px;}"
             "QCheckBox::indicator{width:26px;height:14px;border-radius:7px;background:#2e2a55;}"
             "QCheckBox::indicator:checked{background:#8b7cf6;}"
+            "QLabel#inlineLabel{color:#e4e0ff;font-size:11px;}"
+            "QComboBox#hudSelect,QSpinBox#hudDelaySpin{min-height:22px;max-height:22px;padding:0 6px;background:#1d1a3a;"
+            "border:1px solid #352f66;border-radius:6px;color:#ece8ff;font-size:11px;font-weight:600;}"
+            "QComboBox#hudSelect:hover,QSpinBox#hudDelaySpin:hover{border-color:#8b7cf6;background:#25214a;}"
+            "QComboBox#hudSelect::drop-down{border:none;width:16px;}"
+            "QComboBox#hudSelect::down-arrow{image:none;width:0;height:0;border-left:4px solid transparent;"
+            "border-right:4px solid transparent;border-top:5px solid #d9d2ff;}"
+            "QComboBox#hudSelect QAbstractItemView{background:#1b1836;color:#ece8ff;border:1px solid #3c3572;"
+            "selection-background-color:#8b7cf6;selection-color:#0f0c24;outline:0;}"
+            "QSpinBox#hudDelaySpin::up-button,QSpinBox#hudDelaySpin::down-button{width:14px;border:none;background:transparent;}"
+            "QSpinBox#hudDelaySpin::up-arrow{image:none;width:0;height:0;border-left:3px solid transparent;"
+            "border-right:3px solid transparent;border-bottom:4px solid #d9d2ff;}"
+            "QSpinBox#hudDelaySpin::down-arrow{image:none;width:0;height:0;border-left:3px solid transparent;"
+            "border-right:3px solid transparent;border-top:4px solid #d9d2ff;}"
             "QPushButton#utilityButton,QPushButton#dangerButton{min-height:29px;padding:0 8px;border:none;border-radius:8px;"
             "font-size:11px;font-weight:600;}"
             "QPushButton#utilityButton{background:#e9e5ff;color:#1d1a3a;}"
@@ -344,6 +404,18 @@ class PetControlPanel(QWidget):
         checkbox = QCheckBox(text)
         checkbox.clicked.connect(callback)
         return checkbox
+
+    def _handle_hud_visibility_changed(self, index: int) -> None:
+        value = str(self.hud_visibility.itemData(index) or "show")
+        self._hud_delay_row.setVisible(value == "auto")
+        if self._on_hud_visibility is not None:
+            self._on_hud_visibility(value)
+        elif self._on_hud is not None:
+            self._on_hud(value != "hide")
+
+    def _handle_hud_delay_changed(self, seconds: int) -> None:
+        if self._on_hud_auto_hide_seconds is not None:
+            self._on_hud_auto_hide_seconds(int(seconds))
 
     def _toggle_advanced(self) -> None:
         self._expanded = not self._expanded
@@ -391,6 +463,8 @@ class PetControlPanel(QWidget):
         form: str | None = None,
         follow_model: bool | None = None,
         hud_enabled: bool | None = None,
+        hud_visibility: str | None = None,
+        hud_auto_hide_seconds: int | None = None,
         autonomy: bool | None = None,
     ) -> None:
         if autonomy is not None:
@@ -399,8 +473,22 @@ class PetControlPanel(QWidget):
             self._form_buttons[form].setChecked(True)
         if follow_model is not None:
             self.follow_model.setChecked(follow_model)
-        if hud_enabled is not None:
-            self.hud.setChecked(hud_enabled)
+        resolved_vis = hud_visibility
+        if resolved_vis is None and hud_enabled is not None:
+            resolved_vis = "show" if hud_enabled else "hide"
+        if resolved_vis is not None:
+            idx = self.hud_visibility.findData(resolved_vis)
+            if idx >= 0:
+                self.hud_visibility.blockSignals(True)
+                self.hud_visibility.setCurrentIndex(idx)
+                self.hud_visibility.blockSignals(False)
+            self._hud_delay_row.setVisible(resolved_vis == "auto")
+        if hud_auto_hide_seconds is not None:
+            clamped = max(1, min(60, int(hud_auto_hide_seconds)))
+            if not self.hud_delay.hasFocus():
+                self.hud_delay.blockSignals(True)
+                self.hud_delay.setValue(clamped)
+                self.hud_delay.blockSignals(False)
         if mode in self._mode_buttons:
             self._mode_buttons[mode].setChecked(True)
         closest_size = min(self._size_buttons, key=lambda value: abs(value - size))

@@ -294,6 +294,40 @@ html, body {
   font-size: 12px;
 }
 
+.inline-control {
+  flex: 1;
+  min-inline-size: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.delay-box {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  font-size: 12px;
+  color: var(--muted-foreground, var(--muted-fg-fallback));
+}
+
+.delay-box[hidden] {
+  display: none;
+}
+
+.number-input {
+  inline-size: 56px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--border, var(--border-fallback));
+  background: var(--card, var(--card-fallback));
+  color: var(--foreground, var(--fg-fallback));
+  font: inherit;
+  font-size: 12px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
 .toggle-grid {
   display: grid;
   grid-template-columns: 1fr;
