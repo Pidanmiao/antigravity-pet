@@ -5,6 +5,8 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
+from app.recovery import replace_with_retry
+
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "schema_version": 5,
@@ -176,7 +178,7 @@ class ConfigManager:
             json.dumps(self.data, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
-        temporary.replace(self.path)
+        replace_with_retry(temporary, self.path)
         self._last_mtime_ns = self._stat_mtime_ns()
 
     def get(self, key: str, default: Any = None) -> Any:

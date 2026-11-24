@@ -6,8 +6,9 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
-from app.recovery import CrashRecovery, DiagnosticHooks, _LogStream
+from app.recovery import CrashRecovery, DiagnosticHooks, _LogStream, replace_with_retry
 
 
 class CrashRecoveryTests(unittest.TestCase):
@@ -180,6 +181,40 @@ class CrashRecoveryTests(unittest.TestCase):
                 self.assertIn(recovery.session_id, fault_path.read_text(encoding="utf-8"))
             finally:
                 hooks.close()
+
+    def test_replace_with_retry_recovers_from_transient_permission_error(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            src = root / "state.json.tmp"
+            dst = root / "state.json"
+            src.write_text("{\"ok\": true}", encoding="utf-8")
+
+            calls = {"n": 0}
+            real_replace = Path.replace
+
+            def flaky_replace(self_path: Path, target: Path):
+                calls["n"] += 1
+                if calls["n"] < 3:
+                    raise PermissionError(13, "Access is denied")
+                return real_replace(self_path, target)
+
+            with patch.object(Path, "replace", flaky_replace):
+                replace_with_retry(src, dst, retries=4, base_delay=0.001)
+
+            self.assertEqual(calls["n"], 3)
+            self.assertEqual(dst.read_text(encoding="utf-8"), "{\"ok\": true}")
+
+    def test_heartbeat_survives_persistent_permission_error(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            now = [600.0]
+            recovery = self.recovery(root, now)
+            recovery.begin()
+            now[0] = 615.0
+            with patch.object(Path, "replace", side_effect=PermissionError(13, "Access is denied")):
+                # Must not crash the main event loop when another process locks the file.
+                recovery.heartbeat()
+            self.assertFalse((root / "session_recovery.json.tmp").exists())
 
 
 if __name__ == "__main__":

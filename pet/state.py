@@ -6,6 +6,8 @@ from datetime import date
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from app.recovery import replace_with_retry
+
 
 def _clamp(value: float) -> float:
     return max(0.0, min(1.0, value))
@@ -180,7 +182,7 @@ class PetStateStore:
             json.dumps(asdict(state), ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
-        temporary.replace(self.path)
+        replace_with_retry(temporary, self.path)
 
     @staticmethod
     def _read_mapping(path: Path) -> dict[str, object]:

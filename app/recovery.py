@@ -46,6 +46,31 @@ def configure_logging(path: Path) -> None:
 MAX_CRASH_REPORTS = 20
 MAX_SESSION_ERROR_REPORTS = 20
 FAULTHANDLER_MAX_BYTES = 512 * 1024
+ATOMIC_REPLACE_RETRIES = 5
+ATOMIC_REPLACE_BASE_DELAY = 0.02
+
+
+def replace_with_retry(
+    src: Path,
+    dst: Path,
+    *,
+    retries: int = ATOMIC_REPLACE_RETRIES,
+    base_delay: float = ATOMIC_REPLACE_BASE_DELAY,
+) -> None:
+    """Atomically replace ``dst`` with ``src``, retrying transient Windows locks."""
+    attempts = max(1, int(retries))
+    for attempt in range(attempts):
+        try:
+            src.replace(dst)
+            return
+        except PermissionError:
+            if attempt + 1 >= attempts:
+                try:
+                    src.unlink(missing_ok=True)
+                except OSError:
+                    pass
+                raise
+            time.sleep(base_delay * (attempt + 1))
 
 
 class CrashRecovery:
@@ -110,7 +135,10 @@ class CrashRecovery:
         if marker.get("session_id") != self.session_id:
             return
         marker["last_heartbeat"] = self.clock()
-        self._write_marker(marker)
+        try:
+            self._write_marker(marker)
+        except OSError as error:
+            logging.getLogger(__name__).warning("Skipping heartbeat due to transient file lock: %s", error)
 
     def record_exception(
         self,
@@ -269,7 +297,7 @@ class CrashRecovery:
             json.dumps(value, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
-        temporary.replace(self.marker_path)
+        replace_with_retry(temporary, self.marker_path)
 
     @staticmethod
     def _safe_int(value: object) -> int:
