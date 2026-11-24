@@ -1430,18 +1430,20 @@ class TelemetryCollector:
     # ----- public API -------------------------------------------------------------
 
     def live_snapshot(self, pinned_id: str = "") -> LiveSnapshot | None:
+        # Plugin channel first: when pet-bridge (or token-meter) is actively
+        # writing fresh snapshots, skip standalone process scanning / LS RPC.
+        sidecar = self._live_from_pet_file(pinned_id) or self._live_from_hud_file(pinned_id)
+        if sidecar is not None:
+            return sidecar
+        # Standalone fallback: direct language-server RPC, then offline transcripts.
         if self.use_language_server:
             try:
                 snapshot = self._live_from_ls(pinned_id)
                 if snapshot is not None:
                     return snapshot
-            except Exception:  # any LS failure must fall through to file sources
+            except Exception:  # any LS failure must fall through to offline logs
                 pass
-        return (
-            self._live_from_pet_file(pinned_id)
-            or self._live_from_hud_file(pinned_id)
-            or self._live_from_transcripts(pinned_id)
-        )
+        return self._live_from_transcripts(pinned_id)
 
     def meter_report(self, *, include_subagents: bool = True, pinned_id: str = "", limit: int = 40) -> MeterReport:
         live = self.live_snapshot(pinned_id)

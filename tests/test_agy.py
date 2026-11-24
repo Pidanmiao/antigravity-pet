@@ -611,6 +611,49 @@ class PetWindowAgyTests(unittest.TestCase):
         self.assertEqual(endpoint.port, 54321)
         self.assertEqual(endpoint.csrf_token, "tok-123")
 
+    def test_live_snapshot_prefers_fresh_plugin_channel_and_falls_back_when_stale(self) -> None:
+        from unittest.mock import patch
+
+        from agy.telemetry import HUD_LIVE_MAX_AGE_SECONDS, LiveSnapshot, TelemetryCollector
+
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            pet_live = root / "sidecar_data" / "agy-pet" / "pet-bridge" / "data" / "pet_live.json"
+            pet_live.parent.mkdir(parents=True, exist_ok=True)
+            pet_live.write_text(
+                json.dumps(
+                    {
+                        "active": {
+                            "conversationId": "conv-plugin",
+                            "title": "插件会话",
+                            "status": "CASCADE_RUN_STATUS_IDLE",
+                            "selectedModelLabel": "Gemini 4 Neon (High)",
+                            "quotaRemainingPct": 88.0,
+                        }
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            collector = TelemetryCollector(root, use_language_server=True)
+            ls_stub = LiveSnapshot(source="ls", conversation_id="conv-ls", title="独立直连")
+            with patch.object(collector, "_live_from_ls", return_value=ls_stub) as ls_mock:
+                fresh = collector.live_snapshot()
+                self.assertIsNotNone(fresh)
+                self.assertEqual(fresh.source, "pet_live")
+                self.assertEqual(fresh.conversation_id, "conv-plugin")
+                ls_mock.assert_not_called()
+
+                # Expire plugin file -> must fall back to standalone LS channel.
+                stale_ts = time.time() - HUD_LIVE_MAX_AGE_SECONDS - 5.0
+                os.utime(pet_live, (stale_ts, stale_ts))
+                degraded = collector.live_snapshot()
+                self.assertIsNotNone(degraded)
+                self.assertEqual(degraded.source, "ls")
+                self.assertEqual(degraded.conversation_id, "conv-ls")
+                ls_mock.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()
