@@ -5,7 +5,8 @@ import unittest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QRect
+from PySide6.QtCore import QEvent, QPoint, QRect, Qt
+from PySide6.QtGui import QContextMenuEvent, QKeyEvent
 from PySide6.QtWidgets import QApplication
 
 from pet.renderer import Bubble
@@ -94,6 +95,31 @@ class CompactControlPanelTests(unittest.TestCase):
             panel._toggle_advanced()
             self.application.processEvents()
             self.assertLessEqual(panel.height(), collapsed_height)
+        finally:
+            panel.hide()
+
+    def test_escape_and_right_click_close_control_panel(self) -> None:
+        panel = _panel()
+        try:
+            panel.popup_at(QPoint(120, 120))
+            self.application.processEvents()
+            self.assertTrue(panel.isVisible())
+
+            esc = QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Escape, Qt.KeyboardModifier.NoModifier)
+            panel.keyPressEvent(esc)
+            self.application.processEvents()
+            self.assertTrue(esc.isAccepted())
+            self.assertFalse(panel.isVisible())
+
+            panel.popup_at(QPoint(120, 120))
+            self.application.processEvents()
+            self.assertTrue(panel.isVisible())
+
+            ctx = QContextMenuEvent(QContextMenuEvent.Reason.Mouse, QPoint(10, 10), QPoint(130, 130))
+            panel.contextMenuEvent(ctx)
+            self.application.processEvents()
+            self.assertTrue(ctx.isAccepted())
+            self.assertFalse(panel.isVisible())
         finally:
             panel.hide()
 

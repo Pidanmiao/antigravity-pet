@@ -1091,10 +1091,21 @@ class PetWindow(QWidget):
     # ----- menus, tray, and persistence ----------------------------------------
 
     def contextMenuEvent(self, event) -> None:
+        if self.control_panel.isVisible():
+            self.control_panel.hide()
+            event.accept()
+            return
         self._interrupt_activity()
         self._refresh_control_panel()
         self.control_panel.popup_near_pet(self.frameGeometry())
         event.accept()
+
+    def keyPressEvent(self, event) -> None:
+        if event.key() == Qt.Key.Key_Escape and self.control_panel.isVisible():
+            self.control_panel.hide()
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
     def _create_tray(self) -> None:
         icon = QIcon(str(self.paths.icon_path))

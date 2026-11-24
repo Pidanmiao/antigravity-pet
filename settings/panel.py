@@ -17,7 +17,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
-    QStyle,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -108,7 +107,7 @@ class PetControlPanel(QWidget):
         header.addStretch(1)
         close = QToolButton()
         close.setObjectName("closeButton")
-        close.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_TitleBarCloseButton))
+        close.setText("×")
         close.setToolTip("关闭")
         close.setAccessibleName("关闭")
         close.clicked.connect(self.hide)
@@ -302,9 +301,11 @@ class PetControlPanel(QWidget):
             "color:#ddd8ff;font-size:11px;font-weight:600;}"
             "QToolButton#choiceButton:hover{background:#2e2860;}"
             "QToolButton#choiceButton:checked{background:#8b7cf6;color:#0f0c24;}"
-            "QToolButton#moreButton,QToolButton#closeButton{min-height:28px;padding:0 8px;background:transparent;border:none;"
+            "QToolButton#moreButton{min-height:28px;padding:0 8px;background:transparent;border:none;"
             "border-radius:8px;color:#bdb5ee;font-size:11px;font-weight:600;}"
-            "QToolButton#moreButton:hover,QToolButton#closeButton:hover{background:#2a2550;color:#f7fcff;}"
+            "QToolButton#closeButton{min-width:28px;min-height:28px;padding:0;background:transparent;border:none;"
+            "border-radius:8px;color:#f6fbff;font-size:16px;font-weight:700;}"
+            "QToolButton#moreButton:hover,QToolButton#closeButton:hover{background:#2a2550;color:#ffffff;}"
             "QCheckBox{min-height:20px;color:#e4e0ff;font-size:11px;spacing:6px;}"
             "QCheckBox::indicator{width:26px;height:14px;border-radius:7px;background:#2e2a55;}"
             "QCheckBox::indicator:checked{background:#8b7cf6;}"
@@ -426,6 +427,8 @@ class PetControlPanel(QWidget):
         self._move_near_pet(self._pet_rect)
         self.show()
         self.raise_()
+        self.activateWindow()
+        self.setFocus()
 
     def popup_at(self, point: QPoint) -> None:
         """Fallback used from the tray when there is no visible pet anchor."""
@@ -440,6 +443,19 @@ class PetControlPanel(QWidget):
             self.move(point + QPoint(12, 12))
         self.show()
         self.raise_()
+        self.activateWindow()
+        self.setFocus()
+
+    def keyPressEvent(self, event) -> None:
+        if event.key() == Qt.Key.Key_Escape:
+            self.hide()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def contextMenuEvent(self, event) -> None:
+        self.hide()
+        event.accept()
 
     def _move_near_pet(self, pet_rect: QRect) -> None:
         screen = QApplication.screenAt(pet_rect.center()) or QApplication.primaryScreen()
