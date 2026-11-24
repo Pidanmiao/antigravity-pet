@@ -5,7 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from PySide6.QtGui import QPixmap
+from PySide6.QtCore import QRect, Qt
+from PySide6.QtGui import QImage, QPixmap
 
 from .clip import (
     ActionSpec,
@@ -21,6 +22,80 @@ from .clip import (
 
 # Actions that have a "sitting on a window edge" version (direction "edge").
 EDGE_ASSETS = {PetAction.PERCH: "perch_sit", PetAction.WORKING: "perch_work"}
+
+# Horizontal sleeping art was resized to the standing height tier (187/238/306),
+# which inflates a lying pose to ~1.7x standing scale.  Normalize lying frames
+# so their horizontal body length stays proportional to the standing height.
+SLEEP_ASSETS = frozenset({"sleep", "sleep_enter", "sleep_wake"})
+SLEEP_MAX_WIDTH_RATIO = 1.05
+
+
+def _alpha_bbox(pixmap: QPixmap) -> QRect | None:
+    image = pixmap.toImage().convertToFormat(QImage.Format.Format_RGBA8888)
+    width, height = image.width(), image.height()
+    if width <= 0 or height <= 0:
+        return None
+    raw = bytes(image.constBits())
+    stride = image.bytesPerLine()
+    min_x, min_y = width, height
+    max_x, max_y = -1, -1
+    for y in range(height):
+        row = raw[y * stride : y * stride + width * 4]
+        alphas = row[3::4]
+        if not any(alphas):
+            continue
+        if y < min_y:
+            min_y = y
+        max_y = y
+        for x, alpha in enumerate(alphas):
+            if alpha:
+                if x < min_x:
+                    min_x = x
+                break
+        for x in range(width - 1, -1, -1):
+            if alphas[x]:
+                if x > max_x:
+                    max_x = x
+                break
+    if max_x < min_x or max_y < min_y:
+        return None
+    return QRect(min_x, min_y, max_x - min_x + 1, max_y - min_y + 1)
+
+
+def _scale_pixmap(pixmap: QPixmap, scale: float) -> QPixmap:
+    if scale >= 0.999:
+        return pixmap
+    new_w = max(1, round(pixmap.width() * scale))
+    new_h = max(1, round(pixmap.height() * scale))
+    return pixmap.scaled(
+        new_w,
+        new_h,
+        Qt.AspectRatioMode.IgnoreAspectRatio,
+        Qt.TransformationMode.SmoothTransformation,
+    )
+
+
+def _normalize_sleep_frames(asset_id: str, frames: list[ClipFrame], selected_size: int) -> list[ClipFrame]:
+    if asset_id not in SLEEP_ASSETS or not frames or selected_size <= 0:
+        return frames
+    max_width = max(1, round(selected_size * SLEEP_MAX_WIDTH_RATIO))
+    if asset_id == "sleep":
+        clip_max_w = max(frame.pixmap.width() for frame in frames)
+        if clip_max_w <= max_width:
+            return frames
+        scale = max_width / clip_max_w
+        return [ClipFrame(frame.source, _scale_pixmap(frame.pixmap, scale)) for frame in frames]
+
+    normalized: list[ClipFrame] = []
+    for frame in frames:
+        pixmap = frame.pixmap
+        bbox = _alpha_bbox(pixmap)
+        if bbox is not None:
+            pixmap = pixmap.copy(bbox)
+        if pixmap.width() > max_width:
+            pixmap = _scale_pixmap(pixmap, max_width / pixmap.width())
+        normalized.append(ClipFrame(frame.source, pixmap))
+    return normalized
 
 
 class AssetRegistry:
@@ -232,6 +307,7 @@ class AssetRegistry:
             if isinstance(pick, list) and loaded:
                 picked = [loaded[i] for i in pick if isinstance(i, int) and 0 <= i < len(loaded)]
                 loaded = picked or loaded
+            loaded = _normalize_sleep_frames(asset_id, loaded, selected_size)
             self._frame_cache[cache_key] = tuple(loaded)
         return self._frame_cache[cache_key], selected_size
 

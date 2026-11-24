@@ -103,7 +103,7 @@ class PetRenderer:
 
         slot_top = self.bubble_height + self.margin
         slot_bottom = widget.height() - self.margin - 7.0
-        if layer.anchor.kind in {"drag", "seat", "sleep"}:
+        if layer.anchor.kind in {"drag", "seat"}:
             return QPointF(widget.width() / 2.0, (slot_top + slot_bottom) / 2.0)
         return QPointF(widget.width() / 2.0, slot_bottom)
 
@@ -128,7 +128,7 @@ class PetRenderer:
             if under is not None and (under is pixmap or under.size() != pixmap.size()):
                 under = None
         anchor_x = pixmap.width() * layer.anchor.x
-        anchor_y = pixmap.height() * layer.anchor.y
+        anchor_y = pixmap.height() * (0.97 if layer.anchor.kind == "sleep" else layer.anchor.y)
         painter.save()
         painter.setOpacity(max(0.0, min(1.0, opacity)))
         offset_y = pose.offset_y

@@ -212,6 +212,26 @@ class AssetManifestTests(unittest.TestCase):
                     self.assertTrue(program.body.frames, (form, action, direction))
                     self.assertFalse(program.body.frames[0].pixmap.isNull())
 
+    def test_sleep_frames_are_normalized_to_standing_scale(self) -> None:
+        from PySide6.QtWidgets import QApplication
+
+        QApplication.instance() or QApplication([])
+        root = Path(__file__).resolve().parents[1]
+        base = root / "assets" / "manifests" / "actions_base.json"
+        max_allowed_width = round(238 * 1.05)
+        for form in ("carbon", "hydergon", "neon", "argon", "claude"):
+            with self.subTest(form=form):
+                registry = AssetRegistry(root / form, base_manifest=base)
+                program = registry.program_for(PetAction.SLEEPING, height=238, direction="right")
+                for clip in (program.body, program.enter, program.exit):
+                    self.assertIsNotNone(clip)
+                    for frame in clip.frames:
+                        self.assertLessEqual(frame.pixmap.width(), max_allowed_width)
+                # Horizontal lying sleep frames shrink below standing height.
+                self.assertLess(program.body.frames[0].pixmap.height(), 200)
+                # Standing yawn frame at the start of sleep_enter keeps full standing height.
+                self.assertEqual(program.enter.frames[0].pixmap.height(), 238)
+
 
 if __name__ == "__main__":
     unittest.main()
