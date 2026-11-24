@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import logging
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
-from app.recovery import CrashRecovery
+from app.recovery import CrashRecovery, DiagnosticHooks, _LogStream
 
 
 class CrashRecoveryTests(unittest.TestCase):
@@ -72,6 +74,63 @@ class CrashRecoveryTests(unittest.TestCase):
             self.assertIn("RuntimeError: test crash", report.read_text(encoding="utf-8"))
             self.assertTrue(marker["active"])
             self.assertIn("RuntimeError: test crash", marker["last_error"])
+
+    def test_diagnostic_hooks_capture_thread_exception_and_faulthandler_log(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            now = [200.0]
+            recovery = self.recovery(root, now)
+            recovery.begin()
+            hooks = DiagnosticHooks(recovery)
+            hooks.install(enable_faulthandler=True)
+            try:
+                self.assertTrue(hooks.faulthandler_path.is_file())
+                self.assertIn(recovery.session_id, hooks.faulthandler_path.read_text(encoding="utf-8"))
+
+                def boom() -> None:
+                    raise ValueError("worker boom")
+
+                worker = threading.Thread(target=boom, name="test-worker")
+                worker.start()
+                worker.join(timeout=3.0)
+                reports = list((root / "logs" / "crashes").glob("error-*.log"))
+                self.assertEqual(len(reports), 1)
+                body = reports[0].read_text(encoding="utf-8")
+                self.assertIn("ValueError: worker boom", body)
+                self.assertIn("thread=test-worker", body)
+                self.assertFalse(recovery.fatal)
+            finally:
+                hooks.close()
+
+    def test_record_qt_fatal_and_log_stream(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            now = [300.0]
+            recovery = self.recovery(root, now)
+            recovery.begin()
+            report = recovery.record_qt_fatal("QPixmap: fatal test")
+            self.assertTrue(report.is_file())
+            self.assertIn("QPixmap: fatal test", report.read_text(encoding="utf-8"))
+            self.assertTrue(recovery.fatal)
+            marker = json.loads((root / "session_recovery.json").read_text(encoding="utf-8"))
+            self.assertIn("QtFatal: QPixmap: fatal test", marker["last_error"])
+
+            captured: list[str] = []
+
+            class _Capture(logging.Handler):
+                def emit(self, record: logging.LogRecord) -> None:
+                    captured.append(record.getMessage())
+
+            test_logger = logging.getLogger("stderr.test")
+            handler = _Capture()
+            test_logger.addHandler(handler)
+            try:
+                stream = _LogStream("stderr.test")
+                stream.write("first line\nsecond")
+                stream.flush()
+                self.assertEqual(captured, ["first line", "second"])
+            finally:
+                test_logger.removeHandler(handler)
 
 
 if __name__ == "__main__":

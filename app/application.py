@@ -4,11 +4,12 @@ import logging
 import os
 import sys
 
+from PySide6 import __version__ as PYSIDE_VERSION
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication
 
 from app.paths import AppPaths
-from app.recovery import CrashRecovery, RecoveryStatus, configure_logging
+from app.recovery import CrashRecovery, DiagnosticHooks, RecoveryStatus, configure_logging, flush_logging
 from app.single_instance import SingleInstance
 from app.version import VERSION
 from app.windows_integration import register_application_restart
@@ -35,6 +36,22 @@ def run(argv: list[str] | None = None) -> int:
         version=VERSION,
     )
     recovery_status = recovery.begin()
+    diagnostics = DiagnosticHooks(recovery)
+    diagnostics.install()
+    diagnostics.install_qt_handler()
+    logger = logging.getLogger(__name__)
+    logger.info(
+        "AGY Pet starting version=%s pid=%d python=%s pyside6=%s session=%s unclean_exit=%s crashes=%d safe_mode=%s",
+        VERSION,
+        os.getpid(),
+        sys.version.split()[0],
+        PYSIDE_VERSION,
+        recovery.session_id,
+        recovery_status.unclean_exit,
+        recovery_status.consecutive_crashes,
+        recovery_status.safe_mode,
+    )
+    flush_logging()
 
     def handle_fatal(
         exc_type: type[BaseException],
@@ -42,7 +59,8 @@ def run(argv: list[str] | None = None) -> int:
         tb: object,
     ) -> None:
         report = recovery.record_exception(exc_type, error, tb)
-        logging.getLogger(__name__).critical("Fatal error saved to %s", report)
+        logger.critical("Fatal error saved to %s", report)
+        flush_logging()
         try:
             from PySide6.QtWidgets import QMessageBox
 
@@ -75,11 +93,18 @@ def run(argv: list[str] | None = None) -> int:
         exc_type, error, tb = sys.exc_info()
         if exc_type is not None and error is not None:
             recovery.record_exception(exc_type, error, tb)
+        diagnostics.close()
         instance.close()
         raise
     instance.set_activation_handler(window.activate_from_shortcut)
-    application.aboutToQuit.connect(instance.close)
-    application.aboutToQuit.connect(recovery.finish)
+
+    def _on_about_to_quit() -> None:
+        logger.info("AGY Pet shutting down cleanly session=%s", recovery.session_id)
+        instance.close()
+        recovery.finish()
+        diagnostics.close()
+
+    application.aboutToQuit.connect(_on_about_to_quit)
 
     heartbeat = QTimer(application)
     heartbeat.timeout.connect(recovery.heartbeat)
@@ -96,4 +121,7 @@ def run(argv: list[str] | None = None) -> int:
             smoke_exit_ms = 0
         if smoke_exit_ms:
             QTimer.singleShot(smoke_exit_ms, application.quit)
-    return application.exec()
+    try:
+        return application.exec()
+    finally:
+        diagnostics.close()
