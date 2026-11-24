@@ -37,4 +37,4 @@ description: 管理与控制 AGY 桌宠（支持 Carbon / Hydrogen / Neon / Argo
 
 - 桌宠主配置文件位于 `<PET_ROOT>/config.json` 的 `agy` 字段（支持 `form`、`follow_model`、`hud_enabled`、`hud_mode`、`hud_appearance`、`hud_locked`、`pinned_conversation`、`autonomy`、`reactions`）。
 - 外部或侧边栏控制台更新 `<PET_ROOT>/config.json` 后，运行中的桌宠会在约 1.5 秒内自动热生效并保持坐标位置。
-- 启动或唤醒桌宠命令（在 `<PET_ROOT>` 下）：`pyw -3.13 main.py`（或双击 `启动AGY桌宠.cmd`）。
+- 启动或唤醒桌宠命令（在 `<PET_ROOT>` 下）：优先使用 `.venv\Scripts\pythonw.exe main.py`，其次 `pyw main.py`（或直接双击 `启动AGY桌宠.cmd`）。

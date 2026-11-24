@@ -890,23 +890,55 @@ function updatePetConfig(patch) {
 
 let lastAutoLaunchAttempt = 0;
 
-function resolveLaunchCandidates() {
-  const candidates = [];
-  const venvPyw = join(PET_ROOT, '.venv', 'Scripts', 'pythonw.exe');
-  const venvPy = join(PET_ROOT, '.venv', 'bin', 'python');
-  if (existsSync(venvPyw)) candidates.push([venvPyw, ['main.py']]);
-  if (existsSync(venvPy)) candidates.push([venvPy, ['main.py']]);
+function hasPySide6(cmd, args = []) {
   try {
-    execFileSync('py', ['-3.13', '-c', 'import PySide6'], {
+    execFileSync(cmd, [...args, '-c', 'import PySide6'], {
       windowsHide: true,
       timeout: 2500,
       stdio: 'ignore',
     });
-    candidates.push(['pyw', ['-3.13', 'main.py']]);
+    return true;
   } catch {
-    // Fall back to generic launchers when py -3.13 is unavailable.
+    return false;
   }
-  candidates.push(['pyw', ['main.py']], ['pythonw', ['main.py']], ['python3', ['main.py']]);
+}
+
+function resolveLaunchCandidates() {
+  const candidates = [];
+  const seen = new Set();
+  const pushUnique = (cmd, args) => {
+    const key = `${cmd}\0${args.join('\0')}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      candidates.push([cmd, args]);
+    }
+  };
+
+  const venvPyw = join(PET_ROOT, '.venv', 'Scripts', 'pythonw.exe');
+  const venvPyWin = join(PET_ROOT, '.venv', 'Scripts', 'python.exe');
+  const venvPy = join(PET_ROOT, '.venv', 'bin', 'python');
+  if (existsSync(venvPyw)) pushUnique(venvPyw, ['main.py']);
+  if (existsSync(venvPyWin)) pushUnique(venvPyWin, ['main.py']);
+  if (existsSync(venvPy)) pushUnique(venvPy, ['main.py']);
+
+  if (candidates.length === 0) {
+    if (hasPySide6('py')) {
+      pushUnique('pyw', ['main.py']);
+      pushUnique('py', ['main.py']);
+    }
+    if (hasPySide6('python')) {
+      pushUnique('pythonw', ['main.py']);
+      pushUnique('python', ['main.py']);
+    }
+    if (hasPySide6('python3')) {
+      pushUnique('python3', ['main.py']);
+    }
+  }
+
+  pushUnique('pyw', ['main.py']);
+  pushUnique('pythonw', ['main.py']);
+  pushUnique('python3', ['main.py']);
+  pushUnique('python', ['main.py']);
   return candidates;
 }
 
@@ -920,7 +952,7 @@ function launchPet() {
     const candidates = resolveLaunchCandidates();
     const attempt = (idx) => {
       if (idx >= candidates.length) {
-        resolve({ ok: false, error: '未找到可用的 Python 桌宠运行环境（需 Python 3.13+ 与 PySide6）' });
+        resolve({ ok: false, error: '未找到可用的 Python 桌宠运行环境（需 Python 3 与 PySide6，推荐先创建项目 .venv）' });
         return;
       }
       const [cmd, args] = candidates[idx];
