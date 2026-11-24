@@ -132,6 +132,55 @@ class CrashRecoveryTests(unittest.TestCase):
             finally:
                 test_logger.removeHandler(handler)
 
+    def test_crash_report_pruning_and_session_error_cap(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            now = [400.0]
+            recovery = CrashRecovery(
+                root / "session_recovery.json",
+                root / "logs" / "crashes",
+                version="0.2.0",
+                clock=lambda: now[0],
+                max_crash_reports=3,
+                max_session_error_reports=4,
+            )
+            recovery.begin()
+            written = []
+            for idx in range(6):
+                now[0] += 1.0
+                try:
+                    raise RuntimeError(f"err-{idx}")
+                except RuntimeError as error:
+                    written.append(
+                        recovery.record_error_report(type(error), error, error.__traceback__, context=f"loop-{idx}")
+                    )
+            self.assertEqual(sum(1 for item in written if item is not None), 4)
+            self.assertIsNone(written[4])
+            self.assertIsNone(written[5])
+            remaining = list((root / "logs" / "crashes").glob("error-*.log"))
+            self.assertEqual(len(remaining), 3)
+
+    def test_faulthandler_rotates_when_over_size_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            now = [500.0]
+            recovery = self.recovery(root, now)
+            recovery.begin()
+            fault_path = root / "logs" / "crashes" / "faulthandler.log"
+            fault_path.parent.mkdir(parents=True, exist_ok=True)
+            fault_path.write_text("X" * 2048, encoding="utf-8")
+
+            hooks = DiagnosticHooks(recovery, faulthandler_max_bytes=1024)
+            hooks.install(enable_faulthandler=True)
+            try:
+                backup = fault_path.with_name("faulthandler.log.1")
+                self.assertTrue(backup.is_file())
+                self.assertEqual(backup.stat().st_size, 2048)
+                self.assertLess(fault_path.stat().st_size, 512)
+                self.assertIn(recovery.session_id, fault_path.read_text(encoding="utf-8"))
+            finally:
+                hooks.close()
+
 
 if __name__ == "__main__":
     unittest.main()

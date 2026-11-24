@@ -43,6 +43,11 @@ def configure_logging(path: Path) -> None:
     root.addHandler(handler)
 
 
+MAX_CRASH_REPORTS = 20
+MAX_SESSION_ERROR_REPORTS = 20
+FAULTHANDLER_MAX_BYTES = 512 * 1024
+
+
 class CrashRecovery:
     """Detect unclean exits and keep a small atomic session marker."""
 
@@ -53,15 +58,20 @@ class CrashRecovery:
         *,
         version: str,
         clock: Callable[[], float] = time.time,
+        max_crash_reports: int = MAX_CRASH_REPORTS,
+        max_session_error_reports: int = MAX_SESSION_ERROR_REPORTS,
     ) -> None:
         self.marker_path = Path(marker_path)
         self.crash_reports_dir = Path(crash_reports_dir)
         self.version = str(version)
         self.clock = clock
+        self.max_crash_reports = max(1, int(max_crash_reports))
+        self.max_session_error_reports = max(1, int(max_session_error_reports))
         self.session_id = uuid.uuid4().hex
         self.status = RecoveryStatus()
         self._fatal = False
         self._last_report: Path | None = None
+        self._error_report_count = 0
 
     @property
     def fatal(self) -> bool:
@@ -137,6 +147,7 @@ class CrashRecovery:
         )
         self._write_marker(marker)
         self._last_report = report
+        self._prune_crash_reports()
         logging.getLogger(__name__).critical("Unhandled exception (%s)\n%s", context or "main", formatted)
         flush_logging()
         return report
@@ -148,12 +159,22 @@ class CrashRecovery:
         tb: object,
         *,
         context: str = "",
-    ) -> Path:
+    ) -> Path | None:
         """Persist a non-fatal background/unraisable exception report."""
+        formatted = "".join(traceback.format_exception(exc_type, error, tb))
+        if self._error_report_count >= self.max_session_error_reports:
+            if self._error_report_count == self.max_session_error_reports:
+                self._error_report_count += 1
+                logging.getLogger(__name__).warning(
+                    "Non-fatal error report cap (%d) reached for this session; further reports suppressed",
+                    self.max_session_error_reports,
+                )
+                flush_logging()
+            return None
+        self._error_report_count += 1
         self.crash_reports_dir.mkdir(parents=True, exist_ok=True)
         timestamp = time.strftime("%Y%m%d-%H%M%S", time.localtime(self.clock()))
         report = self.crash_reports_dir / f"error-{timestamp}-{uuid.uuid4().hex[:6]}.log"
-        formatted = "".join(traceback.format_exception(exc_type, error, tb))
         ctx_line = f"context={context}\n" if context else ""
         report.write_text(
             f"Antigravity Desktop Pet {self.version}\n"
@@ -163,6 +184,7 @@ class CrashRecovery:
             f"{ctx_line}\n{formatted}",
             encoding="utf-8",
         )
+        self._prune_crash_reports()
         logging.getLogger(__name__).error("Captured error (%s) -> %s\n%s", context or "unknown", report, formatted)
         flush_logging()
         return report
@@ -192,9 +214,30 @@ class CrashRecovery:
         )
         self._write_marker(marker)
         self._last_report = report
+        self._prune_crash_reports()
         logging.getLogger("qt").critical("QtFatal: %s (saved to %s)", message, report)
         flush_logging()
         return report
+
+    def _prune_crash_reports(self) -> None:
+        if not self.crash_reports_dir.is_dir():
+            return
+        candidates: list[tuple[int, str, Path]] = []
+        for pattern in ("crash-*.log", "error-*.log", "qt-fatal-*.log"):
+            for path in self.crash_reports_dir.glob(pattern):
+                try:
+                    mtime_ns = path.stat().st_mtime_ns
+                except OSError:
+                    continue
+                candidates.append((mtime_ns, path.name, path))
+        if len(candidates) <= self.max_crash_reports:
+            return
+        candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
+        for _mtime, _name, stale in candidates[self.max_crash_reports :]:
+            try:
+                stale.unlink()
+            except OSError:
+                pass
 
     def finish(self) -> None:
         if self._fatal:
@@ -283,8 +326,14 @@ class _LogStream:
 class DiagnosticHooks:
     """Install native faulthandler, thread/unraisable, stderr, and Qt log hooks."""
 
-    def __init__(self, recovery: CrashRecovery) -> None:
+    def __init__(
+        self,
+        recovery: CrashRecovery,
+        *,
+        faulthandler_max_bytes: int = FAULTHANDLER_MAX_BYTES,
+    ) -> None:
         self.recovery = recovery
+        self.faulthandler_max_bytes = max(1024, int(faulthandler_max_bytes))
         self._fault_file: TextIO | None = None
         self._fault_enabled = False
         self._orig_threading_hook: Any = None
@@ -296,6 +345,15 @@ class DiagnosticHooks:
     def faulthandler_path(self) -> Path:
         return self.recovery.crash_reports_dir / "faulthandler.log"
 
+    def _rotate_faulthandler_if_needed(self) -> None:
+        path = self.faulthandler_path
+        try:
+            if path.is_file() and path.stat().st_size >= self.faulthandler_max_bytes:
+                backup = path.with_name(f"{path.name}.1")
+                path.replace(backup)
+        except OSError:
+            pass
+
     def install(self, *, enable_faulthandler: bool = True) -> None:
         self.recovery.crash_reports_dir.mkdir(parents=True, exist_ok=True)
         if sys.stderr is None:
@@ -304,6 +362,7 @@ class DiagnosticHooks:
 
         if enable_faulthandler:
             try:
+                self._rotate_faulthandler_if_needed()
                 self._fault_file = self.faulthandler_path.open("a", encoding="utf-8")
                 self._fault_file.write(
                     f"\n--- session={self.recovery.session_id} pid={os.getpid()} "
